@@ -17,7 +17,7 @@
         
         <main class="max-w-5xl mx-auto w-full space-y-8 my-auto">
             
-            <!-- Global Dashboard Title & Single Auth Header -->
+            <!-- Global Dashboard Title & Auth Header -->
             <div class="border-b border-zinc-800 pb-5 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
                 <div>
                     <h1 class="text-2xl font-black tracking-tight text-white uppercase">Today's Overview</h1>
@@ -46,7 +46,7 @@
 
             <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
 
-                <!-- 1. Pending Tasks Section (Gatividhiya) -->
+                <!-- 1. Pending Tasks Section (Gatividhiya Main Integration) -->
                 <section class="bg-zinc-950 border border-zinc-800 rounded-xl p-6 flex flex-col justify-between shadow-2xl">
                     <div>
                         <div class="flex justify-between items-center mb-6">
@@ -58,16 +58,16 @@
                         
                         <!-- Add Task Input -->
                         <form id="task-form" class="flex gap-2 mb-6">
-                            <input type="text" id="task-input" placeholder="Sign in to add tasks..." disabled
-                                class="flex-1 bg-zinc-900 border border-zinc-800 rounded-lg px-4 py-2.5 text-xs text-white placeholder-zinc-600 focus:outline-none focus:border-zinc-400 disabled:opacity-50 disabled:cursor-not-allowed">
-                            <button type="submit" id="task-add-btn" disabled class="bg-white hover:bg-zinc-200 text-black px-5 py-2.5 rounded-lg text-xs font-bold transition disabled:opacity-50 disabled:cursor-not-allowed">
+                            <input type="text" id="task-input" placeholder="Add missed task..." 
+                                class="flex-1 bg-zinc-900 border border-zinc-800 rounded-lg px-4 py-2.5 text-xs text-white placeholder-zinc-600 focus:outline-none focus:border-zinc-400">
+                            <button type="submit" id="task-add-btn" class="bg-white hover:bg-zinc-200 text-black px-5 py-2.5 rounded-lg text-xs font-bold transition">
                                 Add
                             </button>
                         </form>
 
                         <!-- Task List -->
                         <ul id="task-list" class="space-y-2 max-h-72 overflow-y-auto pr-1">
-                            <li class="text-zinc-600 text-xs text-center py-6 font-mono">Sign in required to view tasks.</li>
+                            <li class="text-zinc-600 text-xs text-center py-6 font-mono">Loading Gatividhiya tasks...</li>
                         </ul>
                     </div>
                 </section>
@@ -111,10 +111,10 @@
     <!-- Firebase SDK (v10 Modular) -->
     <script type="module">
         import { initializeApp as initGatividhiya } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-app.js";
-        import { getFirestore as getGatiFS, collection, addDoc, deleteDoc, doc as gatiDoc, onSnapshot, query, where } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-firestore.js";
+        import { getFirestore as getGatiFS, collection, addDoc, deleteDoc, doc as gatiDoc, onSnapshot, query } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-firestore.js";
         
         import { initializeApp as initMemo } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-app.js";
-        import { getFirestore as getMemoFS, doc as memoDoc, getDoc, setDoc } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-firestore.js";
+        import { getFirestore as getMemoFS, doc as memoDoc, setDoc, onSnapshot as onMemoSnapshot } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-firestore.js";
         import { getAuth, signInWithPopup, GoogleAuthProvider, signOut, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-auth.js";
 
         // -------------------------------------------------------------
@@ -142,7 +142,7 @@
         };
         const appDailymemo = initMemo(dailymemoConfig, "dailymemoApp");
         const dbDailymemo = getMemoFS(appDailymemo);
-        const authPrimary = getAuth(appDailymemo); // Primary Auth Controller
+        const authPrimary = getAuth(appDailymemo);
         const googleProvider = new GoogleAuthProvider();
 
         // -------------------------------------------------------------
@@ -157,7 +157,6 @@
 
         const taskForm = document.getElementById('task-form');
         const taskInput = document.getElementById('task-input');
-        const taskAddBtn = document.getElementById('task-add-btn');
         const taskList = document.getElementById('task-list');
         const pendingCount = document.getElementById('pending-count');
 
@@ -165,124 +164,55 @@
         const saveMemoryBtn = document.getElementById('save-memory-btn');
         const saveStatus = document.getElementById('save-status');
 
-        const todayKey = new Date().toISOString().split('T')[0];
+        // Helper function for Local Date Key (YYYY-MM-DD in local time)
+        const getLocalTodayKey = () => {
+            const d = new Date();
+            const year = d.getFullYear();
+            const month = String(d.getMonth() + 1).padStart(2, '0');
+            const day = String(d.getDate()).padStart(2, '0');
+            return `${year}-${month}-${day}`;
+        };
+
         let currentUserId = null;
-        let unsubscribeTasks = null;
+        let unsubscribeMemo = null;
 
         // -------------------------------------------------------------
-        // Global Auth Handlers
+        // Feature 1: Gatividhiya Tasks (Public Realtime Feed)
         // -------------------------------------------------------------
-        googleLoginBtn.addEventListener('click', async () => {
-            try {
-                await signInWithPopup(authPrimary, googleProvider);
-            } catch (error) {
-                console.error("Sign-In Error:", error);
-                alert("Sign-In Failed: " + error.message);
-            }
-        });
-
-        logoutBtn.addEventListener('click', async () => {
-            try {
-                await signOut(authPrimary);
-            } catch (error) {
-                console.error("Logout Error:", error);
-            }
-        });
-
-        // SINGLE AUTH STATE LISTENER FOR BOTH FEATURES
-        onAuthStateChanged(authPrimary, (user) => {
-            if (user) {
-                currentUserId = user.uid;
-
-                // Update UI Profile Header
-                userName.innerText = user.displayName || "User";
-                userEmail.innerText = user.email || "";
-                userAvatar.src = user.photoURL || `https://ui-avatars.com/api/?name=${encodeURIComponent(user.displayName || 'U')}&background=18181b&color=fff`;
-                
-                googleLoginBtn.classList.add('hidden');
-                userProfile.classList.remove('hidden');
-
-                // Unlock Inputs
-                taskInput.disabled = false;
-                taskAddBtn.disabled = false;
-                memoryInput.disabled = false;
-                saveMemoryBtn.disabled = false;
-                
-                taskInput.placeholder = "Add missed task...";
-                saveStatus.innerText = "Ready";
-
-                // Load Data for both sections
-                syncUserTasks(currentUserId);
-                loadDailyMemory(currentUserId);
-
-            } else {
-                currentUserId = null;
-
-                // Reset Profile Header
-                googleLoginBtn.classList.remove('hidden');
-                userProfile.classList.add('hidden');
-
-                // Lock Inputs
-                taskInput.disabled = true;
-                taskAddBtn.disabled = true;
-                memoryInput.disabled = true;
-                saveMemoryBtn.disabled = true;
-
-                taskInput.placeholder = "Sign in to add tasks...";
-                memoryInput.value = "";
-                taskList.innerHTML = `<li class="text-zinc-600 text-xs text-center py-6 font-mono">Sign in required to view tasks.</li>`;
-                pendingCount.innerText = "0 Tasks";
-                saveStatus.innerText = "Sign in required";
-
-                if (unsubscribeTasks) unsubscribeTasks();
-            }
-        });
-
-        // -------------------------------------------------------------
-        // Feature 1: Tasks Logic (Gatividhiya)
-        // -------------------------------------------------------------
-        function syncUserTasks(userId) {
-            if (unsubscribeTasks) unsubscribeTasks();
-
-            // Fetch tasks filtered by userId so every logged in user gets their own tasks
-            const q = query(
-                collection(dbGatividhiya, "pending_tasks"),
-                where("userId", "==", userId)
-            );
-
-            unsubscribeTasks = onSnapshot(q, (snapshot) => {
-                let tasks = [];
-                snapshot.forEach((docItem) => {
-                    tasks.push({ id: docItem.id, ...docItem.data() });
-                });
-
-                pendingCount.innerText = `${tasks.length} Tasks`;
-
-                if (tasks.length === 0) {
-                    taskList.innerHTML = `<li class="text-zinc-600 text-xs text-center py-6 font-mono">No pending tasks for today.</li>`;
-                    return;
-                }
-
-                taskList.innerHTML = tasks.map(task => `
-                    <li class="flex items-center justify-between bg-zinc-900 border border-zinc-800 p-3 rounded-lg">
-                        <span class="text-xs text-zinc-200">${escapeHtml(task.text || '')}</span>
-                        <button onclick="window.deleteTask('${task.id}')" class="text-zinc-500 hover:text-white text-xs font-mono px-2 py-1 transition">Remove</button>
-                    </li>
-                `).join('');
-            }, (error) => {
-                console.error("Tasks Error:", error);
-                taskList.innerHTML = `<li class="text-rose-400 text-xs text-center py-4 font-mono">Error loading tasks.</li>`;
+        // Direct query to match main Gatividhiya repo schema
+        const qGatividhiya = query(collection(dbGatividhiya, "pending_tasks"));
+        
+        onSnapshot(qGatividhiya, (snapshot) => {
+            let tasks = [];
+            snapshot.forEach((docItem) => {
+                tasks.push({ id: docItem.id, ...docItem.data() });
             });
-        }
+
+            pendingCount.innerText = `${tasks.length} Tasks`;
+
+            if (tasks.length === 0) {
+                taskList.innerHTML = `<li class="text-zinc-600 text-xs text-center py-6 font-mono">No pending tasks found.</li>`;
+                return;
+            }
+
+            taskList.innerHTML = tasks.map(task => `
+                <li class="flex items-center justify-between bg-zinc-900 border border-zinc-800 p-3 rounded-lg">
+                    <span class="text-xs text-zinc-200">${escapeHtml(task.text || '')}</span>
+                    <button onclick="window.deleteTask('${task.id}')" class="text-zinc-500 hover:text-white text-xs font-mono px-2 py-1 transition">Remove</button>
+                </li>
+            `).join('');
+        }, (error) => {
+            console.error("Gatividhiya Listener Error:", error);
+            taskList.innerHTML = `<li class="text-rose-400 text-xs text-center py-4 font-mono">Error loading tasks: ${error.message}</li>`;
+        });
 
         taskForm.addEventListener('submit', async (e) => {
             e.preventDefault();
             const text = taskInput.value.trim();
-            if (!text || !currentUserId) return;
+            if (!text) return;
 
             try {
                 await addDoc(collection(dbGatividhiya, "pending_tasks"), {
-                    userId: currentUserId,
                     text: text,
                     createdAt: new Date().toISOString()
                 });
@@ -302,27 +232,84 @@
         }
 
         // -------------------------------------------------------------
-        // Feature 2: Memory Notes Logic (Dailymemo)
+        // Feature 2: Dailymemo Notes (Google Auth + Realtime Sync)
         // -------------------------------------------------------------
-        async function loadDailyMemory(userId) {
+        googleLoginBtn.addEventListener('click', async () => {
             try {
-                const docRef = memoDoc(dbDailymemo, "users", userId, "entries", todayKey);
-                const docSnap = await getDoc(docRef);
+                await signInWithPopup(authPrimary, googleProvider);
+            } catch (error) {
+                console.error("Sign-In Error:", error);
+                alert("Sign-In Failed: " + error.message);
+            }
+        });
+
+        logoutBtn.addEventListener('click', async () => {
+            try {
+                await signOut(authPrimary);
+            } catch (error) {
+                console.error("Logout Error:", error);
+            }
+        });
+
+        onAuthStateChanged(authPrimary, (user) => {
+            if (user) {
+                currentUserId = user.uid;
+
+                // Update UI Profile
+                userName.innerText = user.displayName || "User";
+                userEmail.innerText = user.email || "";
+                userAvatar.src = user.photoURL || `https://ui-avatars.com/api/?name=${encodeURIComponent(user.displayName || 'U')}&background=18181b&color=fff`;
+                
+                googleLoginBtn.classList.add('hidden');
+                userProfile.classList.remove('hidden');
+
+                // Enable Notes
+                memoryInput.disabled = false;
+                saveMemoryBtn.disabled = false;
+                saveStatus.innerText = "Ready";
+
+                // Listen to Daily Note changes
+                listenDailyMemory(currentUserId);
+
+            } else {
+                currentUserId = null;
+
+                googleLoginBtn.classList.remove('hidden');
+                userProfile.classList.add('hidden');
+
+                memoryInput.value = "";
+                memoryInput.disabled = true;
+                saveMemoryBtn.disabled = true;
+                saveStatus.innerText = "Sign in required";
+
+                if (unsubscribeMemo) unsubscribeMemo();
+            }
+        });
+
+        function listenDailyMemory(userId) {
+            if (unsubscribeMemo) unsubscribeMemo();
+            
+            const todayKey = getLocalTodayKey();
+            const docRef = memoDoc(dbDailymemo, "users", userId, "entries", todayKey);
+
+            // Realtime listener for note content
+            unsubscribeMemo = onMemoSnapshot(docRef, (docSnap) => {
                 if (docSnap.exists()) {
                     memoryInput.value = docSnap.data().content || "";
                 } else {
                     memoryInput.value = "";
                 }
-            } catch (error) {
-                console.error("Error loading note:", error);
-                saveStatus.innerText = "[Load Error]";
-            }
+            }, (error) => {
+                console.error("Error listening to note:", error);
+                saveStatus.innerText = "[Sync Error]";
+            });
         }
 
         saveMemoryBtn.addEventListener('click', async () => {
             if (!currentUserId) return;
             try {
                 saveStatus.innerText = "Saving...";
+                const todayKey = getLocalTodayKey();
                 await setDoc(memoDoc(dbDailymemo, "users", currentUserId, "entries", todayKey), {
                     content: memoryInput.value,
                     updatedAt: new Date().toISOString()
